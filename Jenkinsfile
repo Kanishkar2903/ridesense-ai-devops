@@ -1,5 +1,10 @@
 pipeline {
+
     agent any
+
+    triggers {
+        pollSCM('H/2 * * * *')
+    }
 
     options {
         timestamps()
@@ -7,6 +12,7 @@ pipeline {
     }
 
     environment {
+
         IMAGE_NAME = 'ridesense-ai'
 
         STAGING_CONTAINER = 'ridesense-staging'
@@ -16,33 +22,47 @@ pipeline {
         PRODUCTION_PORT = '3000'
 
         SONAR_HOST_URL = 'http://localhost:9000'
-        PROMETHEUS_URL = 'http://localhost:9090'
+
+        ALERTMANAGER_CONTAINER = 'ridesense-alertmanager'
+        PROMETHEUS_CONTAINER = 'ridesense-prometheus'
+        DISCORD_ADAPTER_CONTAINER = 'ridesense-discord-alerts'
     }
 
     stages {
 
         // ============================================================
-        // 1. BUILD
+        // STAGE 1 - BUILD
         // ============================================================
+
         stage('Build') {
+
             steps {
+
                 echo '========================================'
                 echo 'STAGE 1 - BUILD'
                 echo '========================================'
 
                 bat '''
                 echo Installing project dependencies...
+
                 call npm ci
 
-                if errorlevel 1 exit /b 1
+                if errorlevel 1 (
+                    echo Dependency installation FAILED.
+                    exit /b 1
+                )
 
                 echo.
                 echo Building RideSense Docker image...
 
-                docker build --no-cache ^
-                  -t %IMAGE_NAME%:build-%BUILD_NUMBER% .
+                docker build ^
+                    -t %IMAGE_NAME%:build-%BUILD_NUMBER% ^
+                    .
 
-                if errorlevel 1 exit /b 1
+                if errorlevel 1 (
+                    echo Docker build FAILED.
+                    exit /b 1
+                )
 
                 echo.
                 echo RideSense build image created successfully.
@@ -52,11 +72,15 @@ pipeline {
             }
         }
 
+
         // ============================================================
-        // 2. TEST
+        // STAGE 2 - TEST
         // ============================================================
+
         stage('Test') {
+
             steps {
+
                 echo '========================================'
                 echo 'STAGE 2 - AUTOMATED TESTING'
                 echo '========================================'
@@ -66,14 +90,20 @@ pipeline {
 
                 call npm test -- --runInBand
 
-                if errorlevel 1 exit /b 1
+                if errorlevel 1 (
+                    echo Automated tests FAILED.
+                    exit /b 1
+                )
 
                 echo.
                 echo Running coverage validation...
 
-                call npm run test:coverage -- --runInBand
+                call npm run test:coverage
 
-                if errorlevel 1 exit /b 1
+                if errorlevel 1 (
+                    echo Coverage validation FAILED.
+                    exit /b 1
+                )
 
                 echo.
                 echo Automated Test Gate PASSED
@@ -81,7 +111,9 @@ pipeline {
             }
 
             post {
+
                 always {
+
                     archiveArtifacts(
                         artifacts: 'coverage/**/*',
                         allowEmptyArchive: true
@@ -90,11 +122,15 @@ pipeline {
             }
         }
 
+
         // ============================================================
-        // 3. CODE QUALITY
+        // STAGE 3 - CODE QUALITY
         // ============================================================
+
         stage('Code Quality') {
+
             steps {
+
                 echo '========================================'
                 echo 'STAGE 3 - SONARQUBE QUALITY ANALYSIS'
                 echo '========================================'
@@ -110,19 +146,18 @@ pipeline {
                     echo Running RideSense SonarQube analysis...
 
                     call npx sonarqube-scanner ^
-                      -Dsonar.projectKey=ridesense-ai ^
-                      -Dsonar.projectName="RideSense AI" ^
-                      -Dsonar.host.url=%SONAR_HOST_URL% ^
-                      -Dsonar.login=%SONAR_TOKEN% ^
-                      -Dsonar.sources=src ^
-                      -Dsonar.tests=tests ^
-                      -Dsonar.test.inclusions=tests/**/*.test.js ^
-                      -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info ^
-                      -Dsonar.qualitygate.wait=true
+                        -Dsonar.projectKey=ridesense-ai ^
+                        -Dsonar.projectName="RideSense AI" ^
+                        -Dsonar.host.url=%SONAR_HOST_URL% ^
+                        -Dsonar.login=%SONAR_TOKEN% ^
+                        -Dsonar.sources=src ^
+                        -Dsonar.tests=tests ^
+                        -Dsonar.test.inclusions=tests/**/*.test.js ^
+                        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info ^
+                        -Dsonar.qualitygate.wait=true
 
                     if errorlevel 1 (
-                        echo.
-                        echo SonarQube Quality Gate FAILED
+                        echo SonarQube Quality Gate FAILED.
                         exit /b 1
                     )
 
@@ -134,11 +169,15 @@ pipeline {
             }
         }
 
+
         // ============================================================
-        // 4. SECURITY
+        // STAGE 4 - SECURITY
         // ============================================================
+
         stage('Security') {
+
             steps {
+
                 echo '========================================'
                 echo 'STAGE 4 - SECURITY SCANNING'
                 echo '========================================'
@@ -148,18 +187,24 @@ pipeline {
 
                 call npm audit --omit=dev --audit-level=high
 
-                if errorlevel 1 exit /b 1
+                if errorlevel 1 (
+                    echo Production dependency security gate FAILED.
+                    exit /b 1
+                )
 
                 echo.
                 echo Scanning Docker image with Trivy...
 
                 trivy image ^
-                  --scanners vuln ^
-                  --severity HIGH,CRITICAL ^
-                  --exit-code 1 ^
-                  %IMAGE_NAME%:build-%BUILD_NUMBER%
+                    --scanners vuln ^
+                    --severity HIGH,CRITICAL ^
+                    --exit-code 1 ^
+                    %IMAGE_NAME%:build-%BUILD_NUMBER%
 
-                if errorlevel 1 exit /b 1
+                if errorlevel 1 (
+                    echo Trivy security gate FAILED.
+                    exit /b 1
+                )
 
                 echo.
                 echo Security Gate PASSED
@@ -167,11 +212,15 @@ pipeline {
             }
         }
 
+
         // ============================================================
-        // 5. DEPLOY
+        // STAGE 5 - DEPLOY TO STAGING
         // ============================================================
+
         stage('Deploy') {
+
             steps {
+
                 echo '========================================'
                 echo 'STAGE 5 - STAGING DEPLOYMENT'
                 echo '========================================'
@@ -185,187 +234,118 @@ pipeline {
                 echo Deploying current build to staging...
 
                 docker run -d ^
-                  --name %STAGING_CONTAINER% ^
-                  -p %STAGING_PORT%:3000 ^
-                  %IMAGE_NAME%:build-%BUILD_NUMBER%
+                    --name %STAGING_CONTAINER% ^
+                    -p %STAGING_PORT%:3000 ^
+                    %IMAGE_NAME%:build-%BUILD_NUMBER%
 
-                if errorlevel 1 exit /b 1
+                if errorlevel 1 (
+                    echo Staging Docker deployment FAILED.
+                    exit /b 1
+                )
                 '''
 
                 powershell '''
-                Write-Host "Waiting for RideSense staging startup..."
+                    Write-Host "Waiting for RideSense staging startup..."
 
-                Start-Sleep -Seconds 5
+                    Start-Sleep -Seconds 6
 
-                try {
+                    try {
 
-                    $response =
-                        Invoke-RestMethod `
-                            -Uri "http://localhost:3101/health"
+                        $response =
+                            Invoke-RestMethod `
+                                -Uri "http://localhost:3101/health" `
+                                -Method Get `
+                                -TimeoutSec 10
 
-                    Write-Host (
-                        "Staging Status: " +
-                        $response.status
-                    )
+                        Write-Host "Staging Status: $($response.status)"
+                        Write-Host "Staging Service: $($response.service)"
 
-                    Write-Host (
-                        "Staging Service: " +
-                        $response.service
-                    )
+                        if ($response.status -ne "healthy") {
 
-                    if ($response.status -ne "healthy") {
+                            throw "Staging service returned unhealthy status."
+                        }
+
+                        Write-Host "Staging Deployment PASSED"
+
+                    }
+                    catch {
+
+                        Write-Host "Staging health check FAILED."
+                        Write-Host $_
+
                         exit 1
                     }
-
-                }
-                catch {
-
-                    Write-Host "Staging health validation failed."
-                    exit 1
-                }
-
-                Write-Host "Staging Deployment PASSED"
                 '''
             }
         }
 
+
         // ============================================================
-        // 6. RELEASE
+        // STAGE 6 - RELEASE TO PRODUCTION
         // ============================================================
+
         stage('Release') {
+
             steps {
+
                 echo '========================================'
                 echo 'STAGE 6 - PRODUCTION RELEASE'
                 echo '========================================'
 
                 script {
 
-                    bat '''
-                    echo Creating versioned RideSense release...
-
-                    docker tag ^
-                      %IMAGE_NAME%:build-%BUILD_NUMBER% ^
-                      %IMAGE_NAME%:release-%BUILD_NUMBER%
-
-                    if errorlevel 1 exit /b 1
-
-                    echo.
-                    echo Checking existing production deployment...
-
-                    docker inspect %PRODUCTION_CONTAINER% >nul 2>&1
-
-                    if %ERRORLEVEL% EQU 0 (
-
-                        echo Existing production deployment found.
-
-                        for /f %%i in ('docker inspect -f "{{.Image}}" %PRODUCTION_CONTAINER%') do (
-
-                            echo Preserving production image for rollback...
-
-                            docker tag ^
-                              %%i ^
-                              %IMAGE_NAME%:rollback
-                        )
-
-                        docker rm -f %PRODUCTION_CONTAINER%
-
-                    ) else (
-
-                        echo No existing production deployment found.
-
-                    )
-
-                    echo.
-                    echo Starting new RideSense production release...
-
-                    docker run -d ^
-                      --name %PRODUCTION_CONTAINER% ^
-                      -p %PRODUCTION_PORT%:3000 ^
-                      %IMAGE_NAME%:release-%BUILD_NUMBER%
-
-                    if errorlevel 1 exit /b 1
-                    '''
-
                     try {
 
-                        powershell '''
-                        Write-Host "Waiting for production startup..."
-
-                        Start-Sleep -Seconds 5
-
-                        try {
-
-                            $response =
-                                Invoke-RestMethod `
-                                    -Uri "http://localhost:3000/health"
-
-                            Write-Host (
-                                "Production Status: " +
-                                $response.status
-                            )
-
-                            Write-Host (
-                                "Production Service: " +
-                                $response.service
-                            )
-
-                            if ($response.status -ne "healthy") {
-                                exit 1
-                            }
-
-                        }
-                        catch {
-
-                            Write-Host "Production health validation failed."
-                            exit 1
-                        }
-                        '''
-
                         bat '''
-                        echo.
-                        echo Production health validation PASSED.
+                        echo Creating versioned RideSense release...
 
                         docker tag ^
-                          %IMAGE_NAME%:release-%BUILD_NUMBER% ^
-                          %IMAGE_NAME%:latest
+                            %IMAGE_NAME%:build-%BUILD_NUMBER% ^
+                            %IMAGE_NAME%:release-%BUILD_NUMBER%
 
-                        echo release-%BUILD_NUMBER% > release-info.txt
-                        '''
+                        if errorlevel 1 exit /b 1
 
-                    }
-                    catch (err) {
 
-                        echo 'Production deployment failed.'
-                        echo 'Executing RideSense rollback procedure.'
+                        echo.
+                        echo Checking existing production deployment...
 
-                        bat '''
-                        docker rm -f %PRODUCTION_CONTAINER% 2>nul || echo Production container already removed.
-
-                        docker image inspect %IMAGE_NAME%:rollback >nul 2>&1
+                        docker inspect %PRODUCTION_CONTAINER% >nul 2>&1
 
                         if %ERRORLEVEL% EQU 0 (
 
-                            echo Rollback image available.
+                            echo Existing production deployment found.
 
-                            docker run -d ^
-                              --name %PRODUCTION_CONTAINER% ^
-                              -p %PRODUCTION_PORT%:3000 ^
-                              %IMAGE_NAME%:rollback
+                            for /F %%i in ('docker inspect -f "{{.Image}}" %PRODUCTION_CONTAINER%') do (
+
+                                echo Preserving production image for rollback...
+
+                                docker tag ^
+                                    %%i ^
+                                    %IMAGE_NAME%:rollback
+                            )
+
+                            docker rm -f %PRODUCTION_CONTAINER%
 
                         ) else (
 
-                            echo No previous rollback image is available.
-
+                            echo No existing production deployment found.
                         )
+
+
+                        echo.
+                        echo Starting new RideSense production release...
+
+                        docker run -d ^
+                            --name %PRODUCTION_CONTAINER% ^
+                            -p %PRODUCTION_PORT%:3000 ^
+                            %IMAGE_NAME%:release-%BUILD_NUMBER%
+
+                        if errorlevel 1 exit /b 1
                         '''
 
-                        powershell '''
-                        docker image inspect `
-                            ridesense-ai:rollback `
-                            2>$null |
-                            Out-Null
 
-                        if ($LASTEXITCODE -eq 0) {
+                        powershell '''
+                            Write-Host "Waiting for production startup..."
 
                             Start-Sleep -Seconds 5
 
@@ -373,30 +353,134 @@ pipeline {
 
                                 $response =
                                     Invoke-RestMethod `
-                                        -Uri "http://localhost:3000/health"
+                                        -Uri "http://localhost:3000/health" `
+                                        -Method Get `
+                                        -TimeoutSec 10
 
-                                Write-Host (
-                                    "Rollback Status: " +
-                                    $response.status
-                                )
+                                Write-Host "Production Status: $($response.status)"
+                                Write-Host "Production Service: $($response.service)"
+
+                                if ($response.status -ne "healthy") {
+
+                                    throw "Production health validation failed."
+                                }
 
                             }
                             catch {
 
-                                Write-Host "Rollback health check failed."
+                                Write-Host "Production validation FAILED."
+
+                                exit 1
                             }
+                        '''
+
+
+                        bat '''
+                        echo.
+                        echo Production health validation PASSED.
+
+                        docker tag ^
+                            %IMAGE_NAME%:release-%BUILD_NUMBER% ^
+                            %IMAGE_NAME%:latest
+
+                        echo release-%BUILD_NUMBER% > release-info.txt
+                        '''
+
+
+                        // ------------------------------------------------
+                        // CREATE REAL GIT RELEASE TAG
+                        // ------------------------------------------------
+
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'ridesense-github-credentials',
+                                usernameVariable: 'GITHUB_USER',
+                                passwordVariable: 'GITHUB_TOKEN'
+                            )
+                        ]) {
+
+                            bat '''
+                            echo.
+                            echo ========================================
+                            echo Creating Git release tag
+                            echo ========================================
+
+                            git config user.name "RideSense Jenkins"
+                            git config user.email "jenkins@ridesense.local"
+
+                            git tag -a v1.0.%BUILD_NUMBER% ^
+                                -m "RideSense production release v1.0.%BUILD_NUMBER%"
+
+                            if errorlevel 1 (
+                                echo Git tag creation FAILED.
+                                exit /b 1
+                            )
+
+                            echo.
+                            echo Pushing Git release tag to GitHub...
+
+                            git push ^
+                                https://%GITHUB_USER%:%GITHUB_TOKEN%@github.com/Kanishkar2903/ridesense-ai-devops.git ^
+                                v1.0.%BUILD_NUMBER%
+
+                            if errorlevel 1 (
+                                echo Git release tag push FAILED.
+                                exit /b 1
+                            )
+
+                            echo.
+                            echo Git tag v1.0.%BUILD_NUMBER% successfully published.
+                            '''
                         }
+
+
+                        echo "RideSense production release completed successfully."
+
+                    }
+                    catch (Exception releaseError) {
+
+                        echo 'Production release FAILED.'
+                        echo 'Attempting automatic rollback...'
+
+                        bat '''
+                        docker rm -f %PRODUCTION_CONTAINER% 2>nul || echo Failed production container already removed.
+
+                        docker image inspect %IMAGE_NAME%:rollback >nul 2>&1
+
+                        if %ERRORLEVEL% EQU 0 (
+
+                            echo Rollback image found.
+                            echo Restoring previous RideSense production release...
+
+                            docker run -d ^
+                                --name %PRODUCTION_CONTAINER% ^
+                                -p %PRODUCTION_PORT%:3000 ^
+                                %IMAGE_NAME%:rollback
+
+                            if errorlevel 1 (
+                                echo AUTOMATIC ROLLBACK FAILED.
+                                exit /b 1
+                            )
+
+                            echo Previous production version restored.
+
+                        ) else (
+
+                            echo No rollback image is available.
+                        )
                         '''
 
                         error(
-                            'Production release failed. Rollback procedure executed.'
+                            "Production release failed. Rollback procedure executed."
                         )
                     }
                 }
             }
 
             post {
-                success {
+
+                always {
+
                     archiveArtifacts(
                         artifacts: 'release-info.txt',
                         allowEmptyArchive: true
@@ -405,123 +489,315 @@ pipeline {
             }
         }
 
+
         // ============================================================
-        // 7. MONITORING
+        // STAGE 7 - MONITORING AND ALERTING
         // ============================================================
+
         stage('Monitoring') {
+
             steps {
+
                 echo '========================================'
                 echo 'STAGE 7 - PROMETHEUS MONITORING'
                 echo '========================================'
 
-                powershell '''
-                Write-Host "Checking production health..."
 
-                try {
+                // ----------------------------------------------------
+                // DISCORD WEBHOOK SECRET
+                // ----------------------------------------------------
 
-                    $health =
-                        Invoke-RestMethod `
-                            -Uri "http://localhost:3000/health"
-
-                    Write-Host (
-                        "RideSense Health: " +
-                        $health.status
+                withCredentials([
+                    string(
+                        credentialsId: 'discord-webhook',
+                        variable: 'DISCORD_WEBHOOK_URL'
                     )
+                ]) {
 
-                    if ($health.status -ne "healthy") {
-                        exit 1
-                    }
+                    powershell '''
+                        Write-Host "Configuring RideSense monitoring stack..."
 
+                        # Remove previous monitoring containers.
+
+                        docker rm -f ridesense-prometheus 2>$null
+                        docker rm -f ridesense-alertmanager 2>$null
+                        docker rm -f ridesense-discord-alerts 2>$null
+
+
+                        # ------------------------------------------------
+                        # Create temporary environment file containing the
+                        # Discord secret.
+                        # ------------------------------------------------
+
+                        $envFile =
+                            Join-Path $env:WORKSPACE ".discord.env"
+
+                        Set-Content `
+                            -Path $envFile `
+                            -Value ("DISCORD_WEBHOOK_URL=" + $env:DISCORD_WEBHOOK_URL) `
+                            -NoNewline
+
+
+                        try {
+
+                            # --------------------------------------------
+                            # Discord webhook adapter
+                            # --------------------------------------------
+
+                            Write-Host "Starting Discord alert adapter..."
+
+                            docker run -d `
+                                --name ridesense-discord-alerts `
+                                -p 9094:9094 `
+                                --env-file $envFile `
+                                --mount "type=bind,source=$env:WORKSPACE\\monitoring,target=/app/monitoring,readonly" `
+                                node:24-alpine `
+                                node /app/monitoring/discord-alerts.js
+
+                            if ($LASTEXITCODE -ne 0) {
+
+                                throw "Discord alert adapter failed to start."
+                            }
+
+
+                            # --------------------------------------------
+                            # Alertmanager
+                            # --------------------------------------------
+
+                            Write-Host "Starting Prometheus Alertmanager..."
+
+                            docker run -d `
+                                --name ridesense-alertmanager `
+                                -p 9093:9093 `
+                                --mount "type=bind,source=$env:WORKSPACE\\monitoring\\alertmanager.yml,target=/etc/alertmanager/alertmanager.yml,readonly" `
+                                prom/alertmanager:latest `
+                                --config.file=/etc/alertmanager/alertmanager.yml
+
+                            if ($LASTEXITCODE -ne 0) {
+
+                                throw "Alertmanager failed to start."
+                            }
+
+
+                            # --------------------------------------------
+                            # Prometheus
+                            # --------------------------------------------
+
+                            Write-Host "Starting Prometheus..."
+
+                            docker run -d `
+                                --name ridesense-prometheus `
+                                -p 9090:9090 `
+                                --mount "type=bind,source=$env:WORKSPACE\\monitoring\\prometheus.yml,target=/etc/prometheus/prometheus.yml,readonly" `
+                                --mount "type=bind,source=$env:WORKSPACE\\monitoring\\alert_rules.yml,target=/etc/prometheus/alert_rules.yml,readonly" `
+                                prom/prometheus:latest `
+                                --config.file=/etc/prometheus/prometheus.yml
+
+                            if ($LASTEXITCODE -ne 0) {
+
+                                throw "Prometheus failed to start."
+                            }
+
+                        }
+                        finally {
+
+                            if (Test-Path $envFile) {
+
+                                Remove-Item `
+                                    $envFile `
+                                    -Force
+                            }
+                        }
+
+
+                        Write-Host ""
+                        Write-Host "Waiting for monitoring services..."
+
+                        Start-Sleep -Seconds 10
+
+
+                        # ------------------------------------------------
+                        # Discord adapter validation
+                        # ------------------------------------------------
+
+                        try {
+
+                            $discord =
+                                Invoke-RestMethod `
+                                    -Uri "http://localhost:9094/health" `
+                                    -Method Get `
+                                    -TimeoutSec 10
+
+                            Write-Host "Discord Adapter Status: $($discord.status)"
+
+                            if ($discord.status -ne "healthy") {
+
+                                throw "Discord adapter is unhealthy."
+                            }
+
+                        }
+                        catch {
+
+                            Write-Host "Discord alert adapter validation FAILED."
+
+                            exit 1
+                        }
+
+
+                        # ------------------------------------------------
+                        # Alertmanager validation
+                        # ------------------------------------------------
+
+                        try {
+
+                            $alertmanager =
+                                Invoke-WebRequest `
+                                    -Uri "http://localhost:9093/-/ready" `
+                                    -UseBasicParsing `
+                                    -TimeoutSec 10
+
+                            Write-Host "Alertmanager HTTP Status: $($alertmanager.StatusCode)"
+
+                            if ($alertmanager.StatusCode -ne 200) {
+
+                                throw "Alertmanager is not ready."
+                            }
+
+                        }
+                        catch {
+
+                            Write-Host "Alertmanager validation FAILED."
+
+                            exit 1
+                        }
+
+
+                        # ------------------------------------------------
+                        # Production validation
+                        # ------------------------------------------------
+
+                        Write-Host ""
+                        Write-Host "Checking production health..."
+
+                        try {
+
+                            $health =
+                                Invoke-RestMethod `
+                                    -Uri "http://localhost:3000/health" `
+                                    -Method Get `
+                                    -TimeoutSec 10
+
+                            Write-Host "RideSense Health: $($health.status)"
+
+                            if ($health.status -ne "healthy") {
+
+                                throw "Production is unhealthy."
+                            }
+
+                        }
+                        catch {
+
+                            Write-Host "Production health monitoring FAILED."
+
+                            exit 1
+                        }
+
+
+                        # ------------------------------------------------
+                        # Metrics endpoint validation
+                        # ------------------------------------------------
+
+                        Write-Host ""
+                        Write-Host "Checking RideSense metrics endpoint..."
+
+                        try {
+
+                            $metrics =
+                                Invoke-WebRequest `
+                                    -Uri "http://localhost:3000/metrics" `
+                                    -UseBasicParsing `
+                                    -TimeoutSec 10
+
+                            Write-Host "Metrics HTTP Status: $($metrics.StatusCode)"
+
+                            if ($metrics.StatusCode -ne 200) {
+
+                                throw "Metrics endpoint failed."
+                            }
+
+                        }
+                        catch {
+
+                            Write-Host "Metrics validation FAILED."
+
+                            exit 1
+                        }
+
+
+                        # ------------------------------------------------
+                        # Prometheus target validation
+                        # ------------------------------------------------
+
+                        Write-Host ""
+                        Write-Host "Waiting for Prometheus scrape..."
+
+                        Start-Sleep -Seconds 8
+
+                        try {
+
+                            $query =
+                                Invoke-RestMethod `
+                                    -Uri "http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22ridesense-ai%22%7D" `
+                                    -Method Get `
+                                    -TimeoutSec 10
+
+                            if (
+                                $query.data.result.Count -eq 0
+                            ) {
+
+                                throw "Prometheus did not return the RideSense target."
+                            }
+
+                            $upValue =
+                                $query.data.result[0].value[1]
+
+                            Write-Host "Prometheus RideSense UP Value: $upValue"
+
+                            if ($upValue -ne "1") {
+
+                                throw "Prometheus reports RideSense as DOWN."
+                            }
+
+                            Write-Host "Prometheus Monitoring Gate PASSED"
+
+                        }
+                        catch {
+
+                            Write-Host "Prometheus monitoring validation FAILED."
+
+                            exit 1
+                        }
+                    '''
                 }
-                catch {
-
-                    Write-Host "Production health endpoint failed."
-                    exit 1
-                }
-
-                Write-Host ""
-                Write-Host "Checking RideSense metrics endpoint..."
-
-                try {
-
-                    $metrics =
-                        Invoke-WebRequest `
-                            -Uri "http://localhost:3000/metrics" `
-                            -UseBasicParsing
-
-                    Write-Host (
-                        "Metrics HTTP Status: " +
-                        $metrics.StatusCode
-                    )
-
-                    if ($metrics.StatusCode -ne 200) {
-                        exit 1
-                    }
-
-                }
-                catch {
-
-                    Write-Host "Metrics endpoint failed."
-                    exit 1
-                }
-
-                Write-Host ""
-                Write-Host "Waiting for Prometheus scrape..."
-
-                Start-Sleep -Seconds 8
-
-                $queryUrl =
-                    "http://localhost:9090/api/v1/query" +
-                    "?query=up%7Bjob%3D%22ridesense-ai%22%7D"
-
-                try {
-
-                    $result =
-                        Invoke-RestMethod `
-                            -Uri $queryUrl
-
-                }
-                catch {
-
-                    Write-Host "Unable to communicate with Prometheus."
-                    exit 1
-                }
-
-                if ($result.status -ne "success") {
-                    Write-Host "Prometheus query failed."
-                    exit 1
-                }
-
-                if ($result.data.result.Count -eq 0) {
-                    Write-Host "RideSense target was not found in Prometheus."
-                    exit 1
-                }
-
-                $upValue =
-                    $result.data.result[0].value[1]
-
-                Write-Host (
-                    "Prometheus RideSense UP Value: " +
-                    $upValue
-                )
-
-                if ($upValue -ne "1") {
-                    Write-Host "Prometheus Monitoring Gate FAILED"
-                    exit 1
-                }
-
-                Write-Host "Prometheus Monitoring Gate PASSED"
-                '''
             }
         }
     }
 
+
+    // ================================================================
+    // PIPELINE POST ACTIONS
+    // ================================================================
+
     post {
 
         success {
+
+            echo "RideSense Jenkins Build Number: ${BUILD_NUMBER}"
+
             echo '========================================'
             echo 'RIDESENSE CI/CD PIPELINE SUCCESSFUL'
             echo '========================================'
+
             echo 'Build        : PASSED'
             echo 'Test         : PASSED'
             echo 'Code Quality : PASSED'
@@ -529,17 +805,29 @@ pipeline {
             echo 'Deploy       : PASSED'
             echo 'Release      : PASSED'
             echo 'Monitoring   : PASSED'
+
+            echo "Docker Release : ridesense-ai:release-${BUILD_NUMBER}"
+            echo "Git Release    : v1.0.${BUILD_NUMBER}"
         }
 
+
         failure {
+
             echo '========================================'
             echo 'RIDESENSE CI/CD PIPELINE FAILED'
             echo '========================================'
-            echo 'Review the failed Jenkins stage.'
+
+            echo 'Review the failed stage in the Jenkins console output.'
         }
 
+
         always {
-            echo "RideSense Jenkins Build Number: ${BUILD_NUMBER}"
+
+            bat '''
+            if exist .discord.env (
+                del /F /Q .discord.env
+            )
+            '''
         }
     }
 }
