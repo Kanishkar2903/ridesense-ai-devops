@@ -31,13 +31,13 @@ pipeline {
                 echo '========================================'
 
                 bat '''
-                echo Installing Node.js dependencies...
+                echo Installing project dependencies...
                 call npm ci
 
                 if errorlevel 1 exit /b 1
 
                 echo.
-                echo Building versioned RideSense Docker image...
+                echo Building RideSense Docker image...
 
                 docker build --no-cache ^
                   -t %IMAGE_NAME%:build-%BUILD_NUMBER% .
@@ -45,7 +45,7 @@ pipeline {
                 if errorlevel 1 exit /b 1
 
                 echo.
-                echo Docker image created successfully.
+                echo RideSense build image created successfully.
 
                 docker images %IMAGE_NAME%
                 '''
@@ -62,14 +62,14 @@ pipeline {
                 echo '========================================'
 
                 bat '''
-                echo Running unit and integration tests...
+                echo Running RideSense unit and integration tests...
 
                 call npm test -- --runInBand
 
                 if errorlevel 1 exit /b 1
 
                 echo.
-                echo Running coverage gate...
+                echo Running coverage validation...
 
                 call npm run test:coverage -- --runInBand
 
@@ -96,7 +96,7 @@ pipeline {
         stage('Code Quality') {
             steps {
                 echo '========================================'
-                echo 'STAGE 3 - SONARQUBE CODE QUALITY'
+                echo 'STAGE 3 - SONARQUBE QUALITY ANALYSIS'
                 echo '========================================'
 
                 withCredentials([
@@ -107,158 +107,28 @@ pipeline {
                 ]) {
 
                     bat '''
-                    echo Running authenticated SonarQube analysis...
+                    echo Running RideSense SonarQube analysis...
 
-                    call npm run sonar -- ^
+                    call npx sonarqube-scanner ^
+                      -Dsonar.projectKey=ridesense-ai ^
+                      -Dsonar.projectName="RideSense AI" ^
                       -Dsonar.host.url=%SONAR_HOST_URL% ^
-                      -Dsonar.token=%SONAR_TOKEN%
+                      -Dsonar.login=%SONAR_TOKEN% ^
+                      -Dsonar.sources=src ^
+                      -Dsonar.tests=tests ^
+                      -Dsonar.test.inclusions=tests/**/*.test.js ^
+                      -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info ^
+                      -Dsonar.qualitygate.wait=true
 
-                    if errorlevel 1 exit /b 1
-                    '''
-
-                    powershell '''
-                    Write-Host ""
-                    Write-Host "Reading SonarQube analysis task..."
-
-                    $tokenBytes =
-                        [System.Text.Encoding]::ASCII.GetBytes(
-                            $env:SONAR_TOKEN + ":"
-                        )
-
-                    $encodedToken =
-                        [Convert]::ToBase64String($tokenBytes)
-
-                    $headers = @{
-                        Authorization = "Basic $encodedToken"
-                    }
-
-                    $reportFile =
-                        ".scannerwork/report-task.txt"
-
-                    if (-not (Test-Path $reportFile)) {
-
-                        Write-Host (
-                            "SonarQube report-task.txt was not found."
-                        )
-
-                        exit 1
-                    }
-
-                    $report =
-                        Get-Content $reportFile
-
-                    $ceTaskLine =
-                        $report |
-                        Where-Object {
-                            $_ -like "ceTaskUrl=*"
-                        }
-
-                    if (-not $ceTaskLine) {
-
-                        Write-Host (
-                            "SonarQube CE task URL was not found."
-                        )
-
-                        exit 1
-                    }
-
-                    $ceTaskUrl =
-                        $ceTaskLine.Substring(
-                            "ceTaskUrl=".Length
-                        )
-
-                    Write-Host (
-                        "Waiting for SonarQube processing..."
+                    if errorlevel 1 (
+                        echo.
+                        echo SonarQube Quality Gate FAILED
+                        exit /b 1
                     )
 
-                    $analysisId = $null
-
-                    for (
-                        $attempt = 1;
-                        $attempt -le 20;
-                        $attempt++
-                    ) {
-
-                        $taskResult =
-                            Invoke-RestMethod `
-                                -Uri $ceTaskUrl `
-                                -Headers $headers
-
-                        $taskStatus =
-                            $taskResult.task.status
-
-                        Write-Host (
-                            "SonarQube processing status: " +
-                            $taskStatus
-                        )
-
-                        if ($taskStatus -eq "SUCCESS") {
-
-                            $analysisId =
-                                $taskResult.task.analysisId
-
-                            break
-                        }
-
-                        if (
-                            $taskStatus -eq "FAILED" -or
-                            $taskStatus -eq "CANCELED"
-                        ) {
-
-                            Write-Host (
-                                "SonarQube processing FAILED."
-                            )
-
-                            exit 1
-                        }
-
-                        Start-Sleep -Seconds 3
-                    }
-
-                    if (-not $analysisId) {
-
-                        Write-Host (
-                            "Timed out waiting for SonarQube."
-                        )
-
-                        exit 1
-                    }
-
-                    Write-Host ""
-                    Write-Host (
-                        "Checking SonarQube Quality Gate..."
-                    )
-
-                    $qualityGateUrl =
-                        "$env:SONAR_HOST_URL" +
-                        "/api/qualitygates/project_status" +
-                        "?analysisId=$analysisId"
-
-                    $qualityGate =
-                        Invoke-RestMethod `
-                            -Uri $qualityGateUrl `
-                            -Headers $headers
-
-                    $qualityStatus =
-                        $qualityGate.projectStatus.status
-
-                    Write-Host (
-                        "Quality Gate Status: " +
-                        $qualityStatus
-                    )
-
-                    if ($qualityStatus -ne "OK") {
-
-                        Write-Host (
-                            "SonarQube Quality Gate FAILED"
-                        )
-
-                        exit 1
-                    }
-
-                    Write-Host (
-                        "SonarQube Quality Gate PASSED"
-                    )
+                    echo.
+                    echo SonarQube analysis completed successfully.
+                    echo SonarQube Quality Gate PASSED
                     '''
                 }
             }
@@ -274,14 +144,14 @@ pipeline {
                 echo '========================================'
 
                 bat '''
-                echo Checking production dependencies...
+                echo Checking production npm dependencies...
 
                 call npm audit --omit=dev --audit-level=high
 
                 if errorlevel 1 exit /b 1
 
                 echo.
-                echo Running Trivy HIGH and CRITICAL gate...
+                echo Scanning Docker image with Trivy...
 
                 trivy image ^
                   --scanners vuln ^
@@ -307,12 +177,12 @@ pipeline {
                 echo '========================================'
 
                 bat '''
-                echo Removing old staging container...
+                echo Removing previous RideSense staging container...
 
                 docker rm -f %STAGING_CONTAINER% 2>nul || echo No previous staging container found.
 
                 echo.
-                echo Starting staging container...
+                echo Deploying current build to staging...
 
                 docker run -d ^
                   --name %STAGING_CONTAINER% ^
@@ -323,15 +193,9 @@ pipeline {
                 '''
 
                 powershell '''
-                Write-Host (
-                    "Waiting for staging startup..."
-                )
+                Write-Host "Waiting for RideSense staging startup..."
 
                 Start-Sleep -Seconds 5
-
-                Write-Host (
-                    "Checking staging health..."
-                )
 
                 try {
 
@@ -356,16 +220,11 @@ pipeline {
                 }
                 catch {
 
-                    Write-Host (
-                        "Staging health check failed."
-                    )
-
+                    Write-Host "Staging health validation failed."
                     exit 1
                 }
 
-                Write-Host (
-                    "Staging Deployment PASSED"
-                )
+                Write-Host "Staging Deployment PASSED"
                 '''
             }
         }
@@ -376,13 +235,13 @@ pipeline {
         stage('Release') {
             steps {
                 echo '========================================'
-                echo 'STAGE 6 - VERSIONED PRODUCTION RELEASE'
+                echo 'STAGE 6 - PRODUCTION RELEASE'
                 echo '========================================'
 
                 script {
 
                     bat '''
-                    echo Creating versioned release image...
+                    echo Creating versioned RideSense release...
 
                     docker tag ^
                       %IMAGE_NAME%:build-%BUILD_NUMBER% ^
@@ -397,18 +256,16 @@ pipeline {
 
                     if %ERRORLEVEL% EQU 0 (
 
-                        echo Existing production deployment detected.
+                        echo Existing production deployment found.
 
                         for /f %%i in ('docker inspect -f "{{.Image}}" %PRODUCTION_CONTAINER%') do (
 
-                            echo Saving production image for rollback...
+                            echo Preserving production image for rollback...
 
                             docker tag ^
                               %%i ^
                               %IMAGE_NAME%:rollback
                         )
-
-                        echo Removing existing production container...
 
                         docker rm -f %PRODUCTION_CONTAINER%
 
@@ -419,7 +276,7 @@ pipeline {
                     )
 
                     echo.
-                    echo Starting new production release...
+                    echo Starting new RideSense production release...
 
                     docker run -d ^
                       --name %PRODUCTION_CONTAINER% ^
@@ -432,15 +289,9 @@ pipeline {
                     try {
 
                         powershell '''
-                        Write-Host (
-                            "Waiting for production startup..."
-                        )
+                        Write-Host "Waiting for production startup..."
 
                         Start-Sleep -Seconds 5
-
-                        Write-Host (
-                            "Checking production health..."
-                        )
 
                         try {
 
@@ -458,20 +309,14 @@ pipeline {
                                 $response.service
                             )
 
-                            if (
-                                $response.status -ne
-                                "healthy"
-                            ) {
+                            if ($response.status -ne "healthy") {
                                 exit 1
                             }
 
                         }
                         catch {
 
-                            Write-Host (
-                                "Production health check failed."
-                            )
-
+                            Write-Host "Production health validation failed."
                             exit 1
                         }
                         '''
@@ -479,8 +324,6 @@ pipeline {
                         bat '''
                         echo.
                         echo Production health validation PASSED.
-
-                        echo Tagging successful release as latest...
 
                         docker tag ^
                           %IMAGE_NAME%:release-%BUILD_NUMBER% ^
@@ -493,7 +336,7 @@ pipeline {
                     catch (err) {
 
                         echo 'Production deployment failed.'
-                        echo 'Starting automatic rollback.'
+                        echo 'Executing RideSense rollback procedure.'
 
                         bat '''
                         docker rm -f %PRODUCTION_CONTAINER% 2>nul || echo Production container already removed.
@@ -502,7 +345,7 @@ pipeline {
 
                         if %ERRORLEVEL% EQU 0 (
 
-                            echo Rollback image found.
+                            echo Rollback image available.
 
                             docker run -d ^
                               --name %PRODUCTION_CONTAINER% ^
@@ -511,7 +354,7 @@ pipeline {
 
                         ) else (
 
-                            echo No rollback image is available.
+                            echo No previous rollback image is available.
 
                         )
                         '''
@@ -523,10 +366,6 @@ pipeline {
                             Out-Null
 
                         if ($LASTEXITCODE -eq 0) {
-
-                            Write-Host (
-                                "Waiting for rollback service..."
-                            )
 
                             Start-Sleep -Seconds 5
 
@@ -544,15 +383,13 @@ pipeline {
                             }
                             catch {
 
-                                Write-Host (
-                                    "Rollback health check failed."
-                                )
+                                Write-Host "Rollback health check failed."
                             }
                         }
                         '''
 
                         error(
-                            'Production release failed. Rollback executed.'
+                            'Production release failed. Rollback procedure executed.'
                         )
                     }
                 }
@@ -578,9 +415,7 @@ pipeline {
                 echo '========================================'
 
                 powershell '''
-                Write-Host (
-                    "Checking production health..."
-                )
+                Write-Host "Checking production health..."
 
                 try {
 
@@ -600,17 +435,12 @@ pipeline {
                 }
                 catch {
 
-                    Write-Host (
-                        "Production health endpoint failed."
-                    )
-
+                    Write-Host "Production health endpoint failed."
                     exit 1
                 }
 
                 Write-Host ""
-                Write-Host (
-                    "Checking metrics endpoint..."
-                )
+                Write-Host "Checking RideSense metrics endpoint..."
 
                 try {
 
@@ -631,27 +461,18 @@ pipeline {
                 }
                 catch {
 
-                    Write-Host (
-                        "Metrics endpoint failed."
-                    )
-
+                    Write-Host "Metrics endpoint failed."
                     exit 1
                 }
 
                 Write-Host ""
-                Write-Host (
-                    "Waiting for Prometheus scrape..."
-                )
+                Write-Host "Waiting for Prometheus scrape..."
 
                 Start-Sleep -Seconds 8
 
                 $queryUrl =
                     "http://localhost:9090/api/v1/query" +
                     "?query=up%7Bjob%3D%22ridesense-ai%22%7D"
-
-                Write-Host (
-                    "Checking Prometheus RideSense target..."
-                )
 
                 try {
 
@@ -662,28 +483,17 @@ pipeline {
                 }
                 catch {
 
-                    Write-Host (
-                        "Unable to query Prometheus."
-                    )
-
+                    Write-Host "Unable to communicate with Prometheus."
                     exit 1
                 }
 
                 if ($result.status -ne "success") {
-
-                    Write-Host (
-                        "Prometheus query failed."
-                    )
-
+                    Write-Host "Prometheus query failed."
                     exit 1
                 }
 
                 if ($result.data.result.Count -eq 0) {
-
-                    Write-Host (
-                        "RideSense Prometheus target not found."
-                    )
-
+                    Write-Host "RideSense target was not found in Prometheus."
                     exit 1
                 }
 
@@ -696,17 +506,11 @@ pipeline {
                 )
 
                 if ($upValue -ne "1") {
-
-                    Write-Host (
-                        "Prometheus Monitoring Gate FAILED"
-                    )
-
+                    Write-Host "Prometheus Monitoring Gate FAILED"
                     exit 1
                 }
 
-                Write-Host (
-                    "Prometheus Monitoring Gate PASSED"
-                )
+                Write-Host "Prometheus Monitoring Gate PASSED"
                 '''
             }
         }
