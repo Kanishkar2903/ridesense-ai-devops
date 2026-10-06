@@ -1,0 +1,27 @@
+@"
+groups:
+  - name: ridesense-alerts
+
+    rules:
+      - alert: RideSenseDown
+        expr: up{job="ridesense-ai"} == 0
+        for: 15s
+
+        labels:
+          severity: critical
+
+        annotations:
+          summary: "RideSense AI is unavailable"
+          description: "Prometheus cannot reach the RideSense AI metrics endpoint."
+
+      - alert: RideSenseHighErrorRate
+        expr: increase(ridesense_http_errors_total[1m]) >= 5
+        for: 10s
+
+        labels:
+          severity: warning
+
+        annotations:
+          summary: "RideSense AI is generating repeated HTTP errors"
+          description: "At least five HTTP error responses occurred within one minute."
+"@ | Set-Content .\monitoring\alert_rules.yml

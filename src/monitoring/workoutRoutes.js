@@ -38,7 +38,6 @@ router.post("/", (req, res) => {
 
   const workout = createWorkout(req.body);
 
-  // Increase Prometheus workout counter
   workoutsProcessedTotal.inc();
 
   return res.status(201).json(workout);

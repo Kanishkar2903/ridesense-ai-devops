@@ -8,6 +8,10 @@ const {
   validateWorkout
 } = require("../validation/workoutValidation");
 
+const {
+  coachingRequestsTotal
+} = require("../monitoring/metrics");
+
 const router = express.Router();
 
 router.post("/analyse", (req, res) => {
@@ -20,6 +24,8 @@ router.post("/analyse", (req, res) => {
   }
 
   const result = analyseWorkout(req.body);
+
+  coachingRequestsTotal.inc();
 
   return res.status(200).json({
     riderId: req.body.riderId,
