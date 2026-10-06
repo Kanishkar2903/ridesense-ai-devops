@@ -2,11 +2,18 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "host.docker.internal:9093"
+
 rule_files:
   - /etc/prometheus/alert_rules.yml
 
 scrape_configs:
   - job_name: "ridesense-ai"
+
     metrics_path: /metrics
 
     static_configs:
