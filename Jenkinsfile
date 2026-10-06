@@ -110,14 +110,15 @@ pipeline {
                     echo Running authenticated SonarQube analysis...
 
                     call npm run sonar -- ^
-                      -Dsonar.host.url=%SONAR_HOST_URL%
+                      -Dsonar.host.url=%SONAR_HOST_URL% ^
+                      -Dsonar.token=%SONAR_TOKEN%
 
                     if errorlevel 1 exit /b 1
                     '''
 
                     powershell '''
                     Write-Host ""
-                    Write-Host "Checking SonarQube analysis processing..."
+                    Write-Host "Reading SonarQube analysis task..."
 
                     $tokenBytes =
                         [System.Text.Encoding]::ASCII.GetBytes(
@@ -135,7 +136,11 @@ pipeline {
                         ".scannerwork/report-task.txt"
 
                     if (-not (Test-Path $reportFile)) {
-                        Write-Host "SonarQube report-task.txt was not found."
+
+                        Write-Host (
+                            "SonarQube report-task.txt was not found."
+                        )
+
                         exit 1
                     }
 
@@ -149,7 +154,11 @@ pipeline {
                         }
 
                     if (-not $ceTaskLine) {
-                        Write-Host "SonarQube CE task URL was not found."
+
+                        Write-Host (
+                            "SonarQube CE task URL was not found."
+                        )
+
                         exit 1
                     }
 
@@ -158,11 +167,17 @@ pipeline {
                             "ceTaskUrl=".Length
                         )
 
-                    Write-Host "Waiting for SonarQube processing..."
+                    Write-Host (
+                        "Waiting for SonarQube processing..."
+                    )
 
                     $analysisId = $null
 
-                    for ($attempt = 1; $attempt -le 20; $attempt++) {
+                    for (
+                        $attempt = 1;
+                        $attempt -le 20;
+                        $attempt++
+                    ) {
 
                         $taskResult =
                             Invoke-RestMethod `
@@ -189,8 +204,9 @@ pipeline {
                             $taskStatus -eq "FAILED" -or
                             $taskStatus -eq "CANCELED"
                         ) {
+
                             Write-Host (
-                                "SonarQube analysis processing failed."
+                                "SonarQube processing FAILED."
                             )
 
                             exit 1
@@ -200,15 +216,18 @@ pipeline {
                     }
 
                     if (-not $analysisId) {
+
                         Write-Host (
-                            "Timed out waiting for SonarQube analysis."
+                            "Timed out waiting for SonarQube."
                         )
 
                         exit 1
                     }
 
                     Write-Host ""
-                    Write-Host "Checking SonarQube Quality Gate..."
+                    Write-Host (
+                        "Checking SonarQube Quality Gate..."
+                    )
 
                     $qualityGateUrl =
                         "$env:SONAR_HOST_URL" +
@@ -304,11 +323,15 @@ pipeline {
                 '''
 
                 powershell '''
-                Write-Host "Waiting for staging startup..."
+                Write-Host (
+                    "Waiting for staging startup..."
+                )
 
                 Start-Sleep -Seconds 5
 
-                Write-Host "Checking staging health..."
+                Write-Host (
+                    "Checking staging health..."
+                )
 
                 try {
 
@@ -336,8 +359,6 @@ pipeline {
                     Write-Host (
                         "Staging health check failed."
                     )
-
-                    Write-Host $_
 
                     exit 1
                 }
@@ -370,7 +391,7 @@ pipeline {
                     if errorlevel 1 exit /b 1
 
                     echo.
-                    echo Checking for existing production container...
+                    echo Checking existing production deployment...
 
                     docker inspect %PRODUCTION_CONTAINER% >nul 2>&1
 
@@ -379,20 +400,21 @@ pipeline {
                         echo Existing production deployment detected.
 
                         for /f %%i in ('docker inspect -f "{{.Image}}" %PRODUCTION_CONTAINER%') do (
-                            echo Saving current production image for rollback...
+
+                            echo Saving production image for rollback...
 
                             docker tag ^
                               %%i ^
                               %IMAGE_NAME%:rollback
                         )
 
-                        echo Removing current production container...
+                        echo Removing existing production container...
 
                         docker rm -f %PRODUCTION_CONTAINER%
 
                     ) else (
 
-                        echo No existing production container found.
+                        echo No existing production deployment found.
 
                     )
 
@@ -474,7 +496,7 @@ pipeline {
                         echo 'Starting automatic rollback.'
 
                         bat '''
-                        docker rm -f %PRODUCTION_CONTAINER% 2>nul || echo Failed container already removed.
+                        docker rm -f %PRODUCTION_CONTAINER% 2>nul || echo Production container already removed.
 
                         docker image inspect %IMAGE_NAME%:rollback >nul 2>&1
 
@@ -495,10 +517,10 @@ pipeline {
                         '''
 
                         powershell '''
-                        $rollbackExists =
-                            docker image inspect `
-                                ridesense-ai:rollback `
-                                2>$null
+                        docker image inspect `
+                            ridesense-ai:rollback `
+                            2>$null |
+                            Out-Null
 
                         if ($LASTEXITCODE -eq 0) {
 
@@ -530,7 +552,7 @@ pipeline {
                         '''
 
                         error(
-                            'Production release failed. Rollback procedure executed.'
+                            'Production release failed. Rollback executed.'
                         )
                     }
                 }
@@ -557,7 +579,7 @@ pipeline {
 
                 powershell '''
                 Write-Host (
-                    "Checking production health endpoint..."
+                    "Checking production health..."
                 )
 
                 try {
@@ -587,7 +609,7 @@ pipeline {
 
                 Write-Host ""
                 Write-Host (
-                    "Checking Prometheus metrics endpoint..."
+                    "Checking metrics endpoint..."
                 )
 
                 try {
@@ -623,14 +645,13 @@ pipeline {
 
                 Start-Sleep -Seconds 8
 
-                Write-Host ""
-                Write-Host (
-                    "Checking Prometheus RideSense target..."
-                )
-
                 $queryUrl =
                     "http://localhost:9090/api/v1/query" +
                     "?query=up%7Bjob%3D%22ridesense-ai%22%7D"
+
+                Write-Host (
+                    "Checking Prometheus RideSense target..."
+                )
 
                 try {
 
@@ -660,7 +681,7 @@ pipeline {
                 if ($result.data.result.Count -eq 0) {
 
                     Write-Host (
-                        "RideSense target was not found."
+                        "RideSense Prometheus target not found."
                     )
 
                     exit 1
@@ -710,7 +731,7 @@ pipeline {
             echo '========================================'
             echo 'RIDESENSE CI/CD PIPELINE FAILED'
             echo '========================================'
-            echo 'Review the failed stage in Jenkins.'
+            echo 'Review the failed Jenkins stage.'
         }
 
         always {
