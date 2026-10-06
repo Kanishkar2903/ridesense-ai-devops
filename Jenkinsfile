@@ -30,10 +30,6 @@ pipeline {
 
     stages {
 
-        // ============================================================
-        // STAGE 1 - BUILD
-        // ============================================================
-
         stage('Build') {
 
             steps {
@@ -72,10 +68,6 @@ pipeline {
             }
         }
 
-
-        // ============================================================
-        // STAGE 2 - TEST
-        // ============================================================
 
         stage('Test') {
 
@@ -123,10 +115,6 @@ pipeline {
         }
 
 
-        // ============================================================
-        // STAGE 3 - CODE QUALITY
-        // ============================================================
-
         stage('Code Quality') {
 
             steps {
@@ -170,10 +158,6 @@ pipeline {
         }
 
 
-        // ============================================================
-        // STAGE 4 - SECURITY
-        // ============================================================
-
         stage('Security') {
 
             steps {
@@ -212,10 +196,6 @@ pipeline {
             }
         }
 
-
-        // ============================================================
-        // STAGE 5 - DEPLOY TO STAGING
-        // ============================================================
 
         stage('Deploy') {
 
@@ -261,7 +241,6 @@ pipeline {
                         Write-Host "Staging Service: $($response.service)"
 
                         if ($response.status -ne "healthy") {
-
                             throw "Staging service returned unhealthy status."
                         }
 
@@ -279,10 +258,6 @@ pipeline {
             }
         }
 
-
-        // ============================================================
-        // STAGE 6 - RELEASE TO PRODUCTION
-        // ============================================================
 
         stage('Release') {
 
@@ -361,7 +336,6 @@ pipeline {
                                 Write-Host "Production Service: $($response.service)"
 
                                 if ($response.status -ne "healthy") {
-
                                     throw "Production health validation failed."
                                 }
 
@@ -386,10 +360,6 @@ pipeline {
                         echo release-%BUILD_NUMBER% > release-info.txt
                         '''
 
-
-                        // ------------------------------------------------
-                        // CREATE REAL GIT RELEASE TAG
-                        // ------------------------------------------------
 
                         withCredentials([
                             usernamePassword(
@@ -490,10 +460,6 @@ pipeline {
         }
 
 
-        // ============================================================
-        // STAGE 7 - MONITORING AND ALERTING
-        // ============================================================
-
         stage('Monitoring') {
 
             steps {
@@ -501,11 +467,6 @@ pipeline {
                 echo '========================================'
                 echo 'STAGE 7 - PROMETHEUS MONITORING'
                 echo '========================================'
-
-
-                // ----------------------------------------------------
-                // DISCORD WEBHOOK SECRET
-                // ----------------------------------------------------
 
                 withCredentials([
                     string(
@@ -517,17 +478,10 @@ pipeline {
                     powershell '''
                         Write-Host "Configuring RideSense monitoring stack..."
 
-                        # Remove previous monitoring containers.
-
                         docker rm -f ridesense-prometheus 2>$null
                         docker rm -f ridesense-alertmanager 2>$null
                         docker rm -f ridesense-discord-alerts 2>$null
 
-
-                        # ------------------------------------------------
-                        # Create temporary environment file containing the
-                        # Discord secret.
-                        # ------------------------------------------------
 
                         $envFile =
                             Join-Path $env:WORKSPACE ".discord.env"
@@ -540,10 +494,6 @@ pipeline {
 
                         try {
 
-                            # --------------------------------------------
-                            # Discord webhook adapter
-                            # --------------------------------------------
-
                             Write-Host "Starting Discord alert adapter..."
 
                             docker run -d `
@@ -555,14 +505,9 @@ pipeline {
                                 node /app/monitoring/discord-alerts.js
 
                             if ($LASTEXITCODE -ne 0) {
-
                                 throw "Discord alert adapter failed to start."
                             }
 
-
-                            # --------------------------------------------
-                            # Alertmanager
-                            # --------------------------------------------
 
                             Write-Host "Starting Prometheus Alertmanager..."
 
@@ -574,14 +519,9 @@ pipeline {
                                 --config.file=/etc/alertmanager/alertmanager.yml
 
                             if ($LASTEXITCODE -ne 0) {
-
                                 throw "Alertmanager failed to start."
                             }
 
-
-                            # --------------------------------------------
-                            # Prometheus
-                            # --------------------------------------------
 
                             Write-Host "Starting Prometheus..."
 
@@ -594,7 +534,6 @@ pipeline {
                                 --config.file=/etc/prometheus/prometheus.yml
 
                             if ($LASTEXITCODE -ne 0) {
-
                                 throw "Prometheus failed to start."
                             }
 
@@ -602,10 +541,7 @@ pipeline {
                         finally {
 
                             if (Test-Path $envFile) {
-
-                                Remove-Item `
-                                    $envFile `
-                                    -Force
+                                Remove-Item $envFile -Force
                             }
                         }
 
@@ -615,10 +551,6 @@ pipeline {
 
                         Start-Sleep -Seconds 10
 
-
-                        # ------------------------------------------------
-                        # Discord adapter validation
-                        # ------------------------------------------------
 
                         try {
 
@@ -631,7 +563,6 @@ pipeline {
                             Write-Host "Discord Adapter Status: $($discord.status)"
 
                             if ($discord.status -ne "healthy") {
-
                                 throw "Discord adapter is unhealthy."
                             }
 
@@ -644,10 +575,6 @@ pipeline {
                         }
 
 
-                        # ------------------------------------------------
-                        # Alertmanager validation
-                        # ------------------------------------------------
-
                         try {
 
                             $alertmanager =
@@ -659,7 +586,6 @@ pipeline {
                             Write-Host "Alertmanager HTTP Status: $($alertmanager.StatusCode)"
 
                             if ($alertmanager.StatusCode -ne 200) {
-
                                 throw "Alertmanager is not ready."
                             }
 
@@ -671,10 +597,6 @@ pipeline {
                             exit 1
                         }
 
-
-                        # ------------------------------------------------
-                        # Production validation
-                        # ------------------------------------------------
 
                         Write-Host ""
                         Write-Host "Checking production health..."
@@ -690,7 +612,6 @@ pipeline {
                             Write-Host "RideSense Health: $($health.status)"
 
                             if ($health.status -ne "healthy") {
-
                                 throw "Production is unhealthy."
                             }
 
@@ -702,10 +623,6 @@ pipeline {
                             exit 1
                         }
 
-
-                        # ------------------------------------------------
-                        # Metrics endpoint validation
-                        # ------------------------------------------------
 
                         Write-Host ""
                         Write-Host "Checking RideSense metrics endpoint..."
@@ -721,7 +638,6 @@ pipeline {
                             Write-Host "Metrics HTTP Status: $($metrics.StatusCode)"
 
                             if ($metrics.StatusCode -ne 200) {
-
                                 throw "Metrics endpoint failed."
                             }
 
@@ -733,10 +649,6 @@ pipeline {
                             exit 1
                         }
 
-
-                        # ------------------------------------------------
-                        # Prometheus target validation
-                        # ------------------------------------------------
 
                         Write-Host ""
                         Write-Host "Waiting for Prometheus scrape..."
@@ -751,10 +663,7 @@ pipeline {
                                     -Method Get `
                                     -TimeoutSec 10
 
-                            if (
-                                $query.data.result.Count -eq 0
-                            ) {
-
+                            if ($query.data.result.Count -eq 0) {
                                 throw "Prometheus did not return the RideSense target."
                             }
 
@@ -764,7 +673,6 @@ pipeline {
                             Write-Host "Prometheus RideSense UP Value: $upValue"
 
                             if ($upValue -ne "1") {
-
                                 throw "Prometheus reports RideSense as DOWN."
                             }
 
@@ -783,10 +691,6 @@ pipeline {
         }
     }
 
-
-    // ================================================================
-    // PIPELINE POST ACTIONS
-    // ================================================================
 
     post {
 
@@ -808,6 +712,64 @@ pipeline {
 
             echo "Docker Release : ridesense-ai:release-${BUILD_NUMBER}"
             echo "Git Release    : v1.0.${BUILD_NUMBER}"
+
+
+            withCredentials([
+                string(
+                    credentialsId: 'discord-webhook',
+                    variable: 'DISCORD_WEBHOOK_URL'
+                )
+            ]) {
+
+                powershell '''
+                    $message = @"
+✅ **RideSense CI/CD Build Successful**
+
+Status: SUCCESS
+
+Build Number: #$env:BUILD_NUMBER
+Job: $env:JOB_NAME
+
+Build: PASSED
+Test: PASSED
+Code Quality: PASSED
+Security: PASSED
+Deploy: PASSED
+Release: PASSED
+Monitoring: PASSED
+
+Docker Release: ridesense-ai:release-$env:BUILD_NUMBER
+Git Release: v1.0.$env:BUILD_NUMBER
+
+Service: RideSense AI
+"@
+
+                    $payload = @{
+                        username = "RideSense Jenkins"
+                        content = $message
+                        allowed_mentions = @{
+                            parse = @()
+                        }
+                    } | ConvertTo-Json -Depth 5
+
+                    try {
+
+                        Invoke-RestMethod `
+                            -Uri $env:DISCORD_WEBHOOK_URL `
+                            -Method Post `
+                            -ContentType "application/json" `
+                            -Body $payload
+
+                        Write-Host "Discord SUCCESS notification sent."
+
+                    }
+                    catch {
+
+                        Write-Host "Warning: Discord SUCCESS notification failed."
+                        Write-Host $_
+                    }
+                '''
+            }
         }
 
 
@@ -818,6 +780,59 @@ pipeline {
             echo '========================================'
 
             echo 'Review the failed stage in the Jenkins console output.'
+
+
+            withCredentials([
+                string(
+                    credentialsId: 'discord-webhook',
+                    variable: 'DISCORD_WEBHOOK_URL'
+                )
+            ]) {
+
+                powershell '''
+                    $message = @"
+❌ **RideSense CI/CD Build Failed**
+
+Status: FAILURE
+
+Build Number: #$env:BUILD_NUMBER
+Job: $env:JOB_NAME
+
+A stage in the RideSense CI/CD pipeline failed.
+
+Jenkins performed all configured safety and rollback procedures where applicable.
+
+Please review the Jenkins console output for the failed stage.
+
+Service: RideSense AI
+"@
+
+                    $payload = @{
+                        username = "RideSense Jenkins"
+                        content = $message
+                        allowed_mentions = @{
+                            parse = @()
+                        }
+                    } | ConvertTo-Json -Depth 5
+
+                    try {
+
+                        Invoke-RestMethod `
+                            -Uri $env:DISCORD_WEBHOOK_URL `
+                            -Method Post `
+                            -ContentType "application/json" `
+                            -Body $payload
+
+                        Write-Host "Discord FAILURE notification sent."
+
+                    }
+                    catch {
+
+                        Write-Host "Warning: Discord FAILURE notification failed."
+                        Write-Host $_
+                    }
+                '''
+            }
         }
 
 
